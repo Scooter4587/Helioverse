@@ -1,3 +1,18 @@
+[0.0.5] – 2025-09-30
+Added
+Hud Panel - základná konštrukcia obrazovky
+Automatizovaný Local host startup
+
+Changed
+Úprava a presun niektorých layouts
+
+Fixed
+
+
+Notes
+Pred príprava na hlavnú obrazovku základne
+
+
 [0.0.41] – 2025-09-30
 Added
 Testing format

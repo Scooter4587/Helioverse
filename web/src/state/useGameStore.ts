@@ -2,34 +2,49 @@
 import { create } from 'zustand';
 import { DAILY_TURNS, TZ } from '@/constants';
 import { TimeService as time } from '@/services/time';
-import { Storage, Resources } from '@/services/storage';
+import { Storage, Resources, PersistedState } from '@/services/storage';
 
 type GameStore = {
   userId?: string;
   seasonId?: string;
 
-  // deň & ťahy
+  // deň & ťahy (persist)
   dayISO: string;
   turnsMax: number;
   turnsLeft: number;
+  ageDays: number;      // ⬅️ zobrazuje sa v ľavom paneli
+  totalTurns: number;   // ⬅️ historický súčet (zobrazíme ako (XX))
 
-  // zdroje
+  // zdroje (persist)
   resources: Resources;
 
-  // pending zmeny (aplikujú sa až pri END TURN)
+  // pending zmeny (aplikujú sa pri END TURN)
   pending: Resources;
+
+  // --- Base stats (ľavý panel) – zatiaľ placeholder hodnoty, neskôr dopočítame ---
+  population: number;          // obyvatelia
+  employmentPct: number;       // zamestnanosť v %
+  cityLevel: number;           // level mesta
+  cityProgressPct: number;     // % rozostavanosti k ďalšiemu levelu
+  satisfactionPct: number;     // spokojnosť v %
+  crimePct: number;            // kriminalita v %
+  rebelsPct: number;           // rebeli v %
+  energy: number;              // energia (jednotky/kapacita – neskôr)
+  basePower: number;           // sila základne (index)
 
   // init
   initFor: (userId: string, seasonId?: string) => void;
 
-  // akcie (plánovanie)
-  queueMineHe3: (amount?: number) => void; // plán: +He3 (default +10)
+  // plánovanie (len pending)
+  queueMineHe3: (amount?: number) => void;
+  queueTitanium: (amount?: number) => void;
+  queueWater: (amount?: number) => void;
 
   // spracovanie ťahu
   endTurn: () => void;
 
-  // pomocné
-  simulateMidnight: () => void; // dev reset dňa (ponechá turnsMax)
+  // dev reset dňa (inkrementuje Age)
+  simulateMidnight: () => void;
 };
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -39,9 +54,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
   dayISO: time.todayISO(TZ),
   turnsMax: DAILY_TURNS,
   turnsLeft: DAILY_TURNS,
+  ageDays: 0,
+  totalTurns: 0,
 
   resources: { he3: 0, titanium: 0, water: 0 },
   pending:   { he3: 0, titanium: 0, water: 0 },
+
+  // placeholder metriky ľavého panelu (nateraz statické/naše defaulty)
+  population: 100,        // začnime so 100 obyvateľmi
+  employmentPct: 60,      // 60%
+  cityLevel: 1,
+  cityProgressPct: 0,     // napr. 45% → napíšeme 345 ako veľkosť (lvl + progress)
+  satisfactionPct: 75,
+  crimePct: 5,
+  rebelsPct: 1,
+  energy: 100,
+  basePower: 10,
 
   initFor: (userId, seasonId = 'dev-season-1') => {
     const s = Storage.loadState(userId, seasonId);
@@ -51,8 +79,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       dayISO: s.dayISO,
       turnsMax: s.turnsMax,
       turnsLeft: s.turnsLeft,
+      ageDays: s.ageDays,
+      totalTurns: s.totalTurns,
       resources: r,
-      pending:   { he3: 0, titanium: 0, water: 0 }, // nový ťah začíname s prázdnym pending
+      pending: { he3: 0, titanium: 0, water: 0 },
     });
   },
 
@@ -60,40 +90,60 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { pending } = get();
     set({ pending: { ...pending, he3: pending.he3 + amount } });
   },
+  queueTitanium: (amount = 5) => {
+    const { pending } = get();
+    set({ pending: { ...pending, titanium: pending.titanium + amount } });
+  },
+  queueWater: (amount = 3) => {
+    const { pending } = get();
+    set({ pending: { ...pending, water: pending.water + amount } });
+  },
 
   endTurn: () => {
-    const { userId, seasonId, turnsLeft, turnsMax, dayISO, resources, pending } = get();
+    const { userId, seasonId, turnsLeft, turnsMax, dayISO, ageDays, totalTurns, resources, pending } = get();
     if (!userId || !seasonId) return;
     if (turnsLeft <= 0) return;
 
-    // aplikuj všetky pending zmeny naraz
     const newRes: Resources = {
       he3: resources.he3 + pending.he3,
       titanium: resources.titanium + pending.titanium,
       water: resources.water + pending.water,
     };
 
-    const nextState = { dayISO, turnsMax, turnsLeft: turnsLeft - 1 };
+    const next: PersistedState = {
+      dayISO,
+      turnsMax,
+      turnsLeft: turnsLeft - 1,
+      ageDays,
+      totalTurns: totalTurns + 1, // ⬅️ historický súčet
+    };
 
-    // persist + uložiť do store
-    Storage.saveState(userId, seasonId, nextState);
+    Storage.saveState(userId, seasonId, next);
     Storage.saveResources(userId, seasonId, newRes);
 
     set({
-      ...nextState,
+      ...next,
       resources: newRes,
-      pending: { he3: 0, titanium: 0, water: 0 }, // po spracovaní vyčistiť
+      pending: { he3: 0, titanium: 0, water: 0 },
     });
   },
 
   simulateMidnight: () => {
-    const { userId, seasonId, turnsMax } = get();
+    const { userId, seasonId, turnsMax, ageDays } = get();
     if (!userId || !seasonId) return;
-    const next = { dayISO: time.todayISO(TZ), turnsMax, turnsLeft: turnsMax };
+
+    const next: PersistedState = {
+      dayISO: time.todayISO(TZ),
+      turnsMax,
+      turnsLeft: turnsMax,
+      ageDays: ageDays + 1,  // ⬅️ Age +1
+      totalTurns: get().totalTurns,
+    };
+
     Storage.saveState(userId, seasonId, next);
     set({
       ...next,
-      pending: { he3: 0, titanium: 0, water: 0 }, // dev reset – vyčisti aj pending
+      pending: { he3: 0, titanium: 0, water: 0 },
     });
   },
 }));
