@@ -1,0 +1,70 @@
+name: Push changelog to Discord
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "CHANGELOG.md"
+      - ".github/workflows/discord_changelog.yml"
+
+jobs:
+  send-discord:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Extract latest block (Helioverse format)
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Najnovší blok začína riadkom: [X.Y.Z] – YYYY-MM-DD  (alebo s '-')
+          awk '
+            BEGIN{in_section=0}
+            /^\[[0-9]+\.[0-9]+\.[0-9]+\][[:space:]]*[–-][[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$/ {
+              if(in_section==0){in_section=1; print; next} else {exit}
+            }
+            { if(in_section==1){print} }
+          ' CHANGELOG.md > latest.txt
+
+          if ! [ -s latest.txt ]; then
+            echo "ERROR: Nenájdený žiadny blok verzie vo formáte: [X.Y.Z] – YYYY-MM-DD" >&2
+            echo "Obsah CHANGELOG.md:" >&2
+            nl -ba CHANGELOG.md >&2 || true
+            exit 1
+          fi
+
+          echo "---- Latest block ----"
+          cat latest.txt
+          echo "----------------------"
+
+          # Pošli latest ako multi-line output
+          {
+            echo "latest<<EOF"
+            cat latest.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post to Discord (plain content, AstroMiner-style)
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
+          LATEST: ${{ steps.extract.outputs.latest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Zloženie správy (zachováme nové riadky)
+          CONTENT=$(printf "🛠️ **Helioverse – nový update!**\n\n%s" "$LATEST")
+
+          # JSON payload
+          PAYLOAD=$(jq -n --arg content "$CONTENT" '{content: $content}')
+
+          # Pošli na Discord + vypíš HTTP kód
+          RESP="$(curl -sS -w '\n%{http_code}' \
+                 -H 'Content-Type: application/json' \
+                 -X POST \
+                 -d "$PAYLOAD" \
+                 "$WEBHOOK_URL")"
+          HTTP_CODE="$(printf '%s' "$RESP" | tail -n1)"
+          echo "Discord HTTP code: $HTTP_CODE"
+          test "$HTTP_CODE" = "204" -o "$HTTP_CODE" = "200"
