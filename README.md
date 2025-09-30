@@ -1,3 +1,5 @@
 # Helioverse
-Čistý štart projektu.
-"@ | Out-File -Encoding UTF8 README.md
+
+Development Stage!!!
+
+New online turn based game focused on ecnomoy and space exploration
