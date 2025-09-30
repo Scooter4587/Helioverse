@@ -1,3 +1,16 @@
+[0.0.41] – 2025-09-30
+Added
+Testing format
+
+Changed
+Discord Webhook
+
+Fixed
+Better changelog UI
+
+Notes
+Changes are still work in progress
+
 [0.0.4] – 2025-09-30
 Added
 Dev frontend (Next.js + TS) – základ

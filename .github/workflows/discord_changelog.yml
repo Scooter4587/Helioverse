@@ -7,6 +7,9 @@ on:
       - "CHANGELOG.md"
       - ".github/workflows/discord_changelog.yml"
 
+permissions:
+  contents: read
+
 jobs:
   send-discord:
     runs-on: ubuntu-latest
@@ -19,7 +22,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Najnovší blok začína riadkom: [X.Y.Z] – YYYY-MM-DD  (alebo s '-')
+
+          # Najnovší blok začína hlavičkou: [X.Y.Z] – YYYY-MM-DD (alebo s '-')
           awk '
             BEGIN{in_section=0}
             /^\[[0-9]+\.[0-9]+\.[0-9]+\][[:space:]]*[–-][[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$/ {
@@ -30,36 +34,93 @@ jobs:
 
           if ! [ -s latest.txt ]; then
             echo "ERROR: Nenájdený žiadny blok verzie vo formáte: [X.Y.Z] – YYYY-MM-DD" >&2
-            echo "Obsah CHANGELOG.md:" >&2
-            nl -ba CHANGELOG.md >&2 || true
             exit 1
           fi
 
-          echo "---- Latest block ----"
-          cat latest.txt
-          echo "----------------------"
+          header_line="$(head -n 1 latest.txt)"
+          version="$(echo "$header_line" | sed -E 's/^\[([0-9]+\.[0-9]+\.[0-9]+)\].*$/\1/')"
+          date="$(echo "$header_line" | sed -E 's/^\[[^]]+\][[:space:]]*[–-][[:space:]]*([0-9]{4}-[0-9]{2}-[0-9]{2}).*$/\1/')"
 
-          # Pošli latest ako multi-line output
+          # Telo bez hlavičky
+          tail -n +2 latest.txt > body.txt
+
+          # Rozparcuj body do sekcií a pred každý riadok vlož "- "
+          rm -f Added.txt Changed.txt Fixed.txt Notes.txt || true
+          awk '
+            BEGIN{sec=""}
+            { gsub(/\r$/,"") }               # odseknúť CR, ak by bolo
+            $0=="Added"   {sec="Added";   next}
+            $0=="Changed" {sec="Changed"; next}
+            $0=="Fixed"   {sec="Fixed";   next}
+            $0=="Notes"   {sec="Notes";   next}
+            NF==0 {next}                     # prázdne riadky preskoč
+            sec!="" {print "- "$0 >> (sec".txt")}
+          ' body.txt
+
+          # Načítaj sekcie (môžu byť prázdne)
+          ADDED="$(cat Added.txt 2>/dev/null || true)"
+          CHANGED="$(cat Changed.txt 2>/dev/null || true)"
+          FIXED="$(cat Fixed.txt 2>/dev/null || true)"
+          NOTES="$(cat Notes.txt 2>/dev/null || true)"
+
           {
-            echo "latest<<EOF"
-            cat latest.txt
+            echo "version=$version"
+            echo "date=$date"
+            echo "added<<EOF"
+            echo "$ADDED"
+            echo "EOF"
+            echo "changed<<EOF"
+            echo "$CHANGED"
+            echo "EOF"
+            echo "fixed<<EOF"
+            echo "$FIXED"
+            echo "EOF"
+            echo "notes<<EOF"
+            echo "$NOTES"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Post to Discord (plain content, AstroMiner-style)
+      - name: Post to Discord (embed fields)
         env:
           WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
-          LATEST: ${{ steps.extract.outputs.latest }}
+          VERSION:     ${{ steps.extract.outputs.version }}
+          DATE:        ${{ steps.extract.outputs.date }}
+          ADDED:       ${{ steps.extract.outputs.added }}
+          CHANGED:     ${{ steps.extract.outputs.changed }}
+          FIXED:       ${{ steps.extract.outputs.fixed }}
+          NOTES:       ${{ steps.extract.outputs.notes }}
         shell: bash
         run: |
           set -euo pipefail
-          # Zloženie správy (zachováme nové riadky)
-          CONTENT=$(printf "🛠️ **Helioverse – nový update!**\n\n%s" "$LATEST")
 
-          # JSON payload
-          PAYLOAD=$(jq -n --arg content "$CONTENT" '{content: $content}')
+          # Začni s prázdnym zoznamom fields a pridávaj sekcie len ak nie sú prázdne
+          FIELDS='[]'
+          if [ -n "${ADDED// /}" ]; then
+            FIELDS="$(echo "$FIELDS" | jq --arg v "$ADDED"   '. + [{name:"Added",   value:$v, inline:false}]')"
+          fi
+          if [ -n "${CHANGED// /}" ]; then
+            FIELDS="$(echo "$FIELDS" | jq --arg v "$CHANGED" '. + [{name:"Changed", value:$v, inline:false}]')"
+          fi
+          if [ -n "${FIXED// /}" ]; then
+            FIELDS="$(echo "$FIELDS" | jq --arg v "$FIXED"   '. + [{name:"Fixed",   value:$v, inline:false}]')"
+          fi
+          if [ -n "${NOTES// /}" ]; then
+            FIELDS="$(echo "$FIELDS" | jq --arg v "$NOTES"   '. + [{name:"Notes",   value:$v, inline:false}]')"
+          fi
 
-          # Pošli na Discord + vypíš HTTP kód
+          PAYLOAD="$(jq -n \
+            --arg title "Helioverse – ${VERSION}" \
+            --arg date  "${DATE}" \
+            --argjson fields "${FIELDS}" \
+            '{
+              embeds: [{
+                title: $title,
+                color: 5814783,
+                fields: $fields,
+                footer: { text: ("Released " + $date) }
+              }]
+            }')"
+
           RESP="$(curl -sS -w '\n%{http_code}' \
                  -H 'Content-Type: application/json' \
                  -X POST \
