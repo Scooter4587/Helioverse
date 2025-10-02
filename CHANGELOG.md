@@ -1,3 +1,18 @@
+[0.0.6] – 2025-10-02
+Added
+Pridaný príbeh a jeho základy
+Lore.md - základná orientácia v pojmoch
+Story.md - Dlhšie vysvetlivky a príbehy
+
+Changed
+
+
+Fixed
+
+
+Notes
+Príprava na príručku
+
 [0.0.5] – 2025-09-30
 Added
 Hud Panel - základná konštrukcia obrazovky
